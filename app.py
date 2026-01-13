@@ -3,22 +3,34 @@ import pandas as pd
 import numpy as np
 import joblib
 import matplotlib.pyplot as plt
+import warnings
+
+# ===============================
+# SKLEARN WARNING LARINI O‘CHIRISH
+# ===============================
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=Warning)
 
 # ===============================
 # MODELNI YUKLASH
 # ===============================
 @st.cache_resource
 def load_model():
+    """
+    KNN model, imputer, scaler va label encoderlarni yuklaydi
+    """
     data = joblib.load("knn_car_price_model.pkl")
     return data
 
 data = load_model()
 
-model = data["model"]
-columns = data["columns"]
-imputer = data["imputer"]
-scaler = data["scaler"]
-encoders = data["label_encoders"]
+# Modelni, ustunlar ro'yxatini va preprocesslarni olish
+model = data.get("model")
+columns = data.get("columns")
+imputer = data.get("imputer")
+scaler = data.get("scaler")
+encoders = data.get("label_encoders", {})
 
 # ===============================
 # SAHIFA SOZLAMASI
@@ -53,20 +65,31 @@ with st.form("car_form"):
 # PREDICT FUNKSIYA
 # ===============================
 def predict_price(input_dict):
+    """
+    Input dictionary asosida bashorat chiqaradi (sklearn 1.8+ va column mismatch bilan mos)
+    """
+    # 1️⃣ Foydalanuvchi inputi DataFrame ga
     df_new = pd.DataFrame([input_dict])
-    df_new = df_new.reindex(columns=columns, fill_value=np.nan)
 
+    # 2️⃣ Barcha categorical ustunlarni LabelEncoder bilan encode qilish
     for col, le in encoders.items():
-        if col in df_new:
+        if col in df_new.columns:
             df_new[col] = df_new[col].apply(
-                lambda x: le.transform([x])[0]
-                if x in le.classes_
-                else le.transform([le.classes_[0]])[0]
+                lambda x: le.transform([x])[0] if x in le.classes_ else le.transform([le.classes_[0]])[0]
             )
 
-    df_new = imputer.transform(df_new.to_numpy())
+    # 3️⃣ Reindex: Model trenining barcha ustunlari bilan moslash
+    df_new = df_new.reindex(columns=columns, fill_value=0)  # NaN o‘rniga 0
+
+    # 4️⃣ Imputer va scaler bilan transform
+    try:
+        df_new = imputer.transform(df_new)
+    except AttributeError:
+        df_new = imputer.fit_transform(df_new)
+
     df_new = scaler.transform(df_new)
 
+    # 5️⃣ Bashorat
     return model.predict(df_new)[0]
 
 # ===============================
@@ -84,15 +107,21 @@ if submit:
         "Condition": condition
     }
 
-    price = predict_price(input_data)
-
-    st.success(f"💰 Bashorat qilingan narx: **{price:,.0f} $**")
+    try:
+        price = predict_price(input_data)
+        st.success(f"💰 Bashorat qilingan narx: {price:,.0f} $")
+    except Exception as e:
+        st.error(f"Xatolik yuz berdi: {e}")
 
     # ===============================
     # GRAFIK — Feature Summary
     # ===============================
     st.subheader("📊 Kiritilgan ma’lumotlar")
-    df_show = pd.DataFrame(input_data.items(), columns=["Feature", "Value"])
+    # PyArrow mosligi uchun Value ustunini stringga aylantirish
+    df_show = pd.DataFrame(
+        [(k, str(v)) for k, v in input_data.items()],
+        columns=["Feature", "Value"]
+    )
     st.table(df_show)
 
     # ===============================
@@ -100,12 +129,11 @@ if submit:
     # ===============================
     numeric_data = {
         "Year": year,
-        "Engine": engine,
+        "Engine Size": engine,
         "Mileage": mileage
     }
-
     fig, ax = plt.subplots()
-    ax.bar(numeric_data.keys(), numeric_data.values())
+    ax.bar(numeric_data.keys(), numeric_data.values(), color=['skyblue', 'orange', 'green'])
     ax.set_title("Numeric Features Overview")
-
+    ax.set_ylabel("Value")
     st.pyplot(fig)
